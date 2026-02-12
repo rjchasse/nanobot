@@ -126,6 +126,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -137,6 +138,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             media: Optional list of local file paths for images/media.
             channel: Current channel (telegram, feishu, etc.).
             chat_id: Current chat/user ID.
+            metadata: Optional metadata (sender_name, etc.).
 
         Returns:
             List of messages including system prompt.
@@ -146,7 +148,15 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         # System prompt
         system_prompt = self.build_system_prompt(skill_names)
         if channel and chat_id:
-            system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
+            session_info = f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
+
+            # Add user info for direct messages (not needed for groups since speaker name is in message)
+            if metadata and not metadata.get("is_group", False):
+                sender_name = metadata.get("sender_name")
+                if sender_name:
+                    session_info += f"\nUser: {sender_name}"
+
+            system_prompt += session_info
         messages.append({"role": "system", "content": system_prompt})
 
         # History

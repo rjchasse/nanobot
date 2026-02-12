@@ -20,6 +20,7 @@
 
 ## 📢 News
 
+- **2026-02-11** 🔔 Added Signal support — integrate with Signal Messenger via signal-cli daemon!
 - **2026-02-09** 💬 Added Slack, Email, and QQ support — nanobot now supports multiple chat platforms!
 - **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
 - **2026-02-07** 🚀 Released v0.1.3.post5 with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post5) for details.
@@ -167,13 +168,14 @@ nanobot agent -m "Hello from my local LLM!"
 
 ## 💬 Chat Apps
 
-Talk to your nanobot through Telegram, Discord, WhatsApp, Feishu, DingTalk, Slack, Email, or QQ — anytime, anywhere.
+Talk to your nanobot through Telegram, Discord, WhatsApp, Signal, Feishu, DingTalk, Slack, Email, or QQ — anytime, anywhere.
 
 | Channel | Setup |
 |---------|-------|
 | **Telegram** | Easy (just a token) |
 | **Discord** | Easy (bot token + intents) |
 | **WhatsApp** | Medium (scan QR) |
+| **Signal** | Medium (requires signal-cli) |
 | **Feishu** | Medium (app credentials) |
 | **DingTalk** | Medium (app credentials) |
 | **Slack** | Medium (bot + app tokens) |
@@ -255,6 +257,87 @@ nanobot gateway
 ```bash
 nanobot gateway
 ```
+
+</details>
+
+<details>
+<summary><b>Signal</b></summary>
+
+Requires **signal-cli** daemon running in the background.
+
+**1. Install and setup signal-cli**
+
+Follow the [signal-cli installation guide](https://github.com/AsamK/signal-cli#installation) to install and register/link your Signal account.
+
+**2. Start signal-cli daemon**
+
+```bash
+signal-cli -a +1234567890 daemon --http localhost:8080
+```
+
+**3. Configure nanobot**
+
+```json
+{
+  "channels": {
+    "signal": {
+      "enabled": true,
+      "account": "+1234567890",
+      "daemonHost": "localhost",
+      "daemonPort": 8080,
+      "groupMessageBufferSize": 20,
+      "dm": {
+        "enabled": true,
+        "policy": "allowlist",
+        "allowFrom": ["deadbeef-1234-5678-90ab-cdef12345678"]
+      },
+      "group": {
+        "enabled": true,
+        "policy": "allowlist",
+        "allowFrom": ["deadbeefcafebabe1234567890abcdef"],
+        "requireMention": true
+      }
+    }
+  }
+}
+```
+
+**Configuration options:**
+
+**Top-level:**
+- `account`: Your Signal phone number (e.g., `"+1234567890"`)
+- `daemonHost`: Hostname where signal-cli daemon is running (default: `"localhost"`)
+- `daemonPort`: Port number for signal-cli HTTP API (default: `8080`)
+- `groupMessageBufferSize`: Number of recent group messages to keep for context (default: `20`)
+  - When the bot is mentioned in a group, it will include the last N messages as context
+  - Set to `0` to disable context buffering
+
+**DM configuration (`dm`):**
+- `enabled`: Whether to respond to direct messages (default: `false`)
+- `policy`: Access control policy
+  - `"open"`: Respond to all DMs
+  - `"allowlist"`: Only respond to whitelisted users (set via `allowFrom`)
+- `allowFrom`: List of phone numbers or UUIDs to allow (empty = deny all when policy is "allowlist")
+
+**Group configuration (`group`):**
+- `enabled`: Whether to respond in group chats (default: `false`)
+- `policy`: Which groups to operate in
+  - `"open"`: Respond in all groups
+  - `"allowlist"`: Only respond in whitelisted groups (set via `allowFrom`)
+- `allowFrom`: List of group IDs to allow (only used when `policy` is `"allowlist"`)
+- `requireMention`: Whether bot must be @mentioned to respond (default: `true`)
+
+**Available commands:**
+- `/reset` — Clear conversation history for this chat
+- `/help` — Show available commands
+
+**4. Run**
+
+```bash
+nanobot gateway
+```
+
+Now send a Signal message to your bot and it will respond!
 
 </details>
 
