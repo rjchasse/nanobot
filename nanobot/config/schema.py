@@ -184,20 +184,40 @@ class QQConfig(Base):
     secret: str = ""  # 机器人密钥 (AppSecret) from q.qq.com
     allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
 
-class MatrixConfig(Base):
-    """Matrix (Element) channel configuration."""
+class SignalDMConfig(Base):
+    """Signal DM policy configuration."""
+
     enabled: bool = False
-    homeserver: str = "https://matrix.org"
-    access_token: str = ""
-    user_id: str = ""                       # e.g. @bot:matrix.org
-    device_id: str = ""
-    e2ee_enabled: bool = True               # end-to-end encryption support
-    sync_stop_grace_seconds: int = 2        # graceful sync_forever shutdown timeout
-    max_media_bytes: int = 20 * 1024 * 1024 # inbound + outbound attachment limit
-    allow_from: list[str] = Field(default_factory=list)
-    group_policy: Literal["open", "mention", "allowlist"] = "open"
-    group_allow_from: list[str] = Field(default_factory=list)
-    allow_room_mentions: bool = False
+    policy: str = "allowlist"  # "open" or "allowlist"
+    allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers/UUIDs
+
+
+class SignalGroupConfig(Base):
+    """Signal group policy configuration."""
+
+    enabled: bool = False
+    policy: str = "allowlist"  # "open" or "allowlist" - which groups to operate in
+    allow_from: list[str] = Field(default_factory=list)  # Allowed group IDs if allowlist policy
+    require_mention: bool = True  # Whether bot must be mentioned to respond
+
+
+class SignalConfig(Base):
+    """Signal channel configuration using signal-cli daemon (HTTP mode with -a flag only)."""
+
+    enabled: bool = False
+    account: str = ""  # Your Signal phone number (e.g., "+1234567890")
+    daemon_host: str = "localhost"
+    daemon_port: int = 8080
+    group_message_buffer_size: int = 20  # Number of recent group messages to keep for context
+    dm: SignalDMConfig = Field(default_factory=SignalDMConfig)
+    group: SignalGroupConfig = Field(default_factory=SignalGroupConfig)
+    # Deprecated fields for backward compatibility
+    group_policy: str = Field(
+        default="mention"
+    )  # Deprecated: use group.policy and group.require_mention
+    group_allow_from: list[str] = Field(default_factory=list)  # Deprecated: use group.allow_from
+    allow_from: list[str] = Field(default_factory=list)  # Deprecated: use dm.allow_from
+
 
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
@@ -214,6 +234,7 @@ class ChannelsConfig(Base):
     slack: SlackConfig = Field(default_factory=SlackConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
     matrix: MatrixConfig = Field(default_factory=MatrixConfig)
+    signal: SignalConfig = Field(default_factory=SignalConfig)
 
 
 class AgentDefaults(Base):
