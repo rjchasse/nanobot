@@ -291,6 +291,14 @@ class SignalChannel(BaseChannel):
         mentions = data_message.get("mentions", [])
         reaction = data_message.get("reaction")
 
+        # Log full data_message for debugging group detection
+        logger.debug(
+            f"Data message from {sender_number}: "
+            f"groupInfo={group_info}, "
+            f"groupV2={data_message.get('groupV2')}, "
+            f"keys={list(data_message.keys())}"
+        )
+
         # Ignore reaction messages (emoji reactions to messages)
         if reaction:
             logger.debug(f"Ignoring reaction message from {sender_number}: {reaction}")
@@ -302,9 +310,19 @@ class SignalChannel(BaseChannel):
             return
 
         # Determine chat_id (group ID or sender number)
-        if group_info:
+        # Check both groupInfo (v1) and groupV2 (v2) fields for group detection
+        group_v2 = data_message.get("groupV2")
+        is_group_message = group_info is not None or group_v2 is not None
+
+        if is_group_message:
             # This is a group message
-            chat_id = group_info.get("groupId", sender_number)
+            # Extract group ID from either groupInfo or groupV2
+            if group_info:
+                chat_id = group_info.get("groupId", sender_number)
+            elif group_v2:
+                chat_id = group_v2.get("id", sender_number)
+            else:
+                chat_id = sender_number
 
             # Add to group message buffer BEFORE checking if we should respond
             # This ensures we capture context even for messages we don't reply to
@@ -361,7 +379,7 @@ class SignalChannel(BaseChannel):
         media_paths = []
 
         # For group messages, include recent message context
-        if group_info:
+        if is_group_message:
             buffer_context = self._get_group_buffer_context(chat_id)
             if buffer_context:
                 content_parts.append(f"[Recent group messages for context:]\n{buffer_context}\n---")
@@ -369,7 +387,7 @@ class SignalChannel(BaseChannel):
         # Prepend sender name for group messages so history shows who said what
         if message_text:
             # Strip bot mentions from text (for group messages)
-            if group_info:
+            if is_group_message:
                 message_text = self._strip_bot_mention(message_text, mentions)
                 # Prepend sender name to make it clear who is speaking
                 display_name = sender_name or sender_number
@@ -445,8 +463,14 @@ class SignalChannel(BaseChannel):
                 "timestamp": timestamp,
                 "sender_name": sender_name,
                 "sender_number": sender_number,
-                "is_group": group_info is not None,
-                "group_id": group_info.get("groupId") if group_info else None,
+                "is_group": is_group_message,
+                "group_id": (
+                    group_info.get("groupId")
+                    if group_info
+                    else group_v2.get("id")
+                    if group_v2
+                    else None
+                ),
             },
         )
 
