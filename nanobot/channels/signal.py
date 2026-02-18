@@ -12,7 +12,7 @@ from loguru import logger
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.config.schema import SignalConfig
+from nanobot.config.schema import SignalConfig, TranscriptionConfig
 
 if TYPE_CHECKING:
     from nanobot.session.manager import SessionManager
@@ -31,11 +31,18 @@ class SignalChannel(BaseChannel):
     name = "signal"
 
     def __init__(
-        self, config: SignalConfig, bus: MessageBus, session_manager: "SessionManager | None" = None
+        self,
+        config: SignalConfig,
+        bus: MessageBus,
+        session_manager: "SessionManager | None" = None,
+        transcription_config: TranscriptionConfig | None = None,
+        groq_api_key: str = "",
     ):
         super().__init__(config, bus)
         self.config: SignalConfig = config
         self.session_manager = session_manager
+        self.transcription_config = transcription_config
+        self.groq_api_key = groq_api_key
         self._http: httpx.AsyncClient | None = None
         self._request_id = 0
         self._sse_task: asyncio.Task | None = None
@@ -427,7 +434,32 @@ class SignalChannel(BaseChannel):
                         if media_type not in ("image", "audio", "video"):
                             media_type = "file"
 
-                        content_parts.append(f"[{media_type}: {dest_path}]")
+                        # Handle audio transcription
+                        if media_type == "audio":
+                            from nanobot.providers.transcription import get_transcription_provider
+
+                            # Use transcription config if provided, otherwise default to local
+                            if self.transcription_config:
+                                transcriber = get_transcription_provider(
+                                    provider=self.transcription_config.provider,
+                                    groq_api_key=self.groq_api_key,
+                                    model_size=self.transcription_config.model_size,
+                                    device=self.transcription_config.device,
+                                    compute_type=self.transcription_config.compute_type,
+                                )
+                            else:
+                                # Default to local transcription with base model
+                                transcriber = get_transcription_provider(provider="local")
+
+                            transcription = await transcriber.transcribe(dest_path)
+                            if transcription:
+                                logger.info(f"Transcribed audio: {transcription[:50]}...")
+                                content_parts.append(f"[transcription: {transcription}]")
+                            else:
+                                content_parts.append(f"[{media_type}: {dest_path}]")
+                        else:
+                            content_parts.append(f"[{media_type}: {dest_path}]")
+
                         logger.debug(f"Downloaded attachment: {filename} -> {dest_path}")
                     else:
                         logger.warning(f"Attachment not found: {source_path}")

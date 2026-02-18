@@ -43,6 +43,7 @@ class ChannelManager:
                 self.channels["telegram"] = TelegramChannel(
                     self.config.channels.telegram,
                     self.bus,
+                    transcription_config=self.config.tools.transcription,
                     groq_api_key=self.config.providers.groq.api_key,
                 )
                 logger.info("Telegram channel enabled")
@@ -148,6 +149,8 @@ class ChannelManager:
                     self.config.channels.signal,
                     self.bus,
                     session_manager=self.session_manager,
+                    transcription_config=self.config.tools.transcription,
+                    groq_api_key=self.config.providers.groq.api_key,
                 )
                 logger.info("Signal channel enabled")
             except ImportError as e:
@@ -197,18 +200,15 @@ class ChannelManager:
                 logger.info(f"Stopped {name} channel")
             except Exception as e:
                 logger.error(f"Error stopping {name}: {e}")
-    
+
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
         logger.info("Outbound dispatcher started")
-        
+
         while True:
             try:
-                msg = await asyncio.wait_for(
-                    self.bus.consume_outbound(),
-                    timeout=1.0
-                )
-                
+                msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
+
                 channel = self.channels.get(msg.channel)
                 if channel:
                     try:
@@ -230,10 +230,7 @@ class ChannelManager:
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""
         return {
-            name: {
-                "enabled": True,
-                "running": channel.is_running
-            }
+            name: {"enabled": True, "running": channel.is_running}
             for name, channel in self.channels.items()
         }
     

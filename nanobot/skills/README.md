@@ -22,3 +22,4 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `summarize` | Summarize URLs, files, and YouTube videos |
 | `tmux` | Remote-control tmux sessions |
 | `skill-creator` | Create new skills |
+| `opencode-td-loop` | Spawn OpenCode in server mode to process TD tickets in a continuous loop |
