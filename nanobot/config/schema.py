@@ -192,12 +192,6 @@ class SignalConfig(Base):
     group_message_buffer_size: int = 20  # Number of recent group messages to keep for context
     dm: SignalDMConfig = Field(default_factory=SignalDMConfig)
     group: SignalGroupConfig = Field(default_factory=SignalGroupConfig)
-    # Deprecated fields for backward compatibility
-    group_policy: str = Field(
-        default="mention"
-    )  # Deprecated: use group.policy and group.require_mention
-    group_allow_from: list[str] = Field(default_factory=list)  # Deprecated: use group.allow_from
-    allow_from: list[str] = Field(default_factory=list)  # Deprecated: use dm.allow_from
 
 
 class ChannelsConfig(Base):

@@ -56,6 +56,8 @@ class SignalChannel(BaseChannel):
     async def _start_http_mode(self) -> None:
         """Start Signal channel using Server-Sent Events for receiving messages."""
         base_url = f"http://{self.config.daemon_host}:{self.config.daemon_port}"
+        reconnect_delay_s = 1.0
+        max_reconnect_delay_s = 30.0
 
         while self._running:
             try:
@@ -70,18 +72,21 @@ class SignalChannel(BaseChannel):
                     if response.status_code == 200:
                         logger.info("Connected to signal-cli daemon")
                     else:
-                        logger.warning(
+                        raise ConnectionRefusedError(
                             f"signal-cli daemon check returned status {response.status_code}"
                         )
                 except Exception as e:
                     raise ConnectionRefusedError(f"signal-cli daemon not responding: {e}")
 
-                # Start SSE receiver in background
-                self._sse_task = asyncio.create_task(self._sse_receive_loop())
+                # Reset reconnect delay after successful connection check.
+                reconnect_delay_s = 1.0
 
-                # Keep running until stopped
-                while self._running:
-                    await asyncio.sleep(1)
+                # Start SSE receiver and supervise it. If it exits while we're still
+                # running, treat it as a disconnect and reconnect.
+                self._sse_task = asyncio.create_task(self._sse_receive_loop())
+                await self._sse_task
+                if self._running:
+                    raise ConnectionError("Signal SSE stream ended unexpectedly")
 
             except asyncio.CancelledError:
                 break
@@ -90,25 +95,29 @@ class SignalChannel(BaseChannel):
                     f"{e}. Make sure signal-cli daemon is running: "
                     f"signal-cli -a {self.config.account} daemon --http {self.config.daemon_host}:{self.config.daemon_port}"
                 )
-                if self._running:
-                    logger.info("Retrying connection in 10 seconds...")
-                    await asyncio.sleep(10)
             except Exception as e:
                 logger.error(f"Signal channel error: {e}")
-                if self._running:
-                    logger.info("Reconnecting to signal-cli daemon in 5 seconds...")
-                    await asyncio.sleep(5)
             finally:
                 if self._sse_task:
-                    self._sse_task.cancel()
+                    if not self._sse_task.done():
+                        self._sse_task.cancel()
                     try:
                         await self._sse_task
                     except asyncio.CancelledError:
+                        pass
+                    except Exception:
                         pass
                     self._sse_task = None
                 if self._http:
                     await self._http.aclose()
                     self._http = None
+
+            if self._running:
+                logger.info(
+                    f"Reconnecting to signal-cli daemon in {reconnect_delay_s:.0f} seconds..."
+                )
+                await asyncio.sleep(reconnect_delay_s)
+                reconnect_delay_s = min(reconnect_delay_s * 2, max_reconnect_delay_s)
 
     async def stop(self) -> None:
         """Stop the Signal channel."""
@@ -164,15 +173,16 @@ class SignalChannel(BaseChannel):
     async def _sse_receive_loop(self) -> None:
         """Receive messages via Server-Sent Events (HTTP mode)."""
         if not self._http:
-            return
+            raise RuntimeError("HTTP client not initialized for Signal SSE stream")
 
         logger.info("Started Signal message receive loop (SSE)")
 
         try:
             async with self._http.stream("GET", "/api/v1/events") as response:
                 if response.status_code != 200:
-                    logger.error(f"SSE connection failed with status {response.status_code}")
-                    return
+                    raise ConnectionError(
+                        f"SSE connection failed with status {response.status_code}"
+                    )
 
                 logger.info("Subscribed to Signal messages via SSE")
 
@@ -214,10 +224,15 @@ class SignalChannel(BaseChannel):
                         elif line.startswith("event:"):
                             pass  # Ignore event type for now
 
+                if self._running:
+                    raise ConnectionError("Signal SSE stream closed by remote endpoint")
+
         except asyncio.CancelledError:
             logger.info("SSE receive loop cancelled")
+            raise
         except Exception as e:
             logger.error(f"Error in SSE receive loop: {e}")
+            raise
 
     async def _handle_receive_notification(self, params: dict[str, Any]) -> None:
         """Handle incoming message notification from signal-cli."""
@@ -350,7 +365,7 @@ class SignalChannel(BaseChannel):
                 return
 
             # Check if we should respond to this group message (mention requirement)
-            should_respond = self._should_respond_in_group(chat_id, message_text, mentions)
+            should_respond = self._should_respond_in_group(message_text, mentions)
 
             if not should_respond:
                 logger.debug(
@@ -550,7 +565,7 @@ class SignalChannel(BaseChannel):
         if not self._is_allowed(sender_id, chat_id, is_group):
             logger.warning(
                 f"Command access denied for sender {sender_id} on channel {self.name}. "
-                f"Check dm.policy and dm.allow_from (for DMs) or group_policy and group_allow_from (for groups)."
+                f"Check dm.policy and dm.allow_from (for DMs) or group.policy and group.allow_from (for groups)."
             )
             return False
 
@@ -609,33 +624,19 @@ class SignalChannel(BaseChannel):
             OutboundMessage(channel=self.name, chat_id=chat_id, content=help_text)
         )
 
-    def _should_respond_in_group(
-        self, chat_id: str, message_text: str, mentions: list[dict[str, Any]]
-    ) -> bool:
+    def _should_respond_in_group(self, message_text: str, mentions: list[dict[str, Any]]) -> bool:
         """
         Determine if the bot should respond to a group message.
 
         Args:
-            chat_id: The group ID
             message_text: The message text content
             mentions: List of mentions from Signal (format: [{"number": "+1234567890", "start": 0, "length": 10}])
 
         Returns:
             True if bot should respond, False otherwise
         """
-        # Check if mention is required (with backward compatibility)
-        # If deprecated group_policy is "open" or "mention", use that; otherwise use group.require_mention
-        require_mention = self.config.group.require_mention
-
-        # Backward compatibility: if group_policy is set to "open", don't require mention
-        if self.config.group_policy == "open":
-            require_mention = False
-        # Backward compatibility: if group_policy is "mention", require mention
-        elif self.config.group_policy == "mention":
-            require_mention = True
-
-        # If mention is not required, respond to all messages
-        if not require_mention:
+        # Group reply behavior is controlled only by group.require_mention.
+        if not self.config.group.require_mention:
             return True
 
         # If mention is required, check if bot was mentioned
@@ -706,9 +707,7 @@ class SignalChannel(BaseChannel):
             if not self.config.group.enabled:
                 return False
             if self.config.group.policy == "allowlist":
-                # Check new group.allow_from first, fallback to deprecated group_allow_from
-                allow_list = self.config.group.allow_from or self.config.group_allow_from
-                return chat_id in allow_list
+                return chat_id in self.config.group.allow_from
             return True
 
         # For DMs, check dm policy
@@ -716,8 +715,7 @@ class SignalChannel(BaseChannel):
             return False
         if self.config.dm.policy == "allowlist":
             # Check sender_id against allowlist
-            # Try new dm.allow_from first, fallback to deprecated allow_from
-            allow_list = self.config.dm.allow_from or self.config.allow_from
+            allow_list = self.config.dm.allow_from
             sender_str = str(sender_id)
             if sender_str in allow_list:
                 return True
