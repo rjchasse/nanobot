@@ -558,6 +558,9 @@ class SignalChannel(BaseChannel):
         elif command == "help":
             await self._handle_help_command(chat_id)
             return True
+        elif command == "restart":
+            await self._handle_restart_command(chat_id)
+            return True
 
         return False
 
@@ -587,11 +590,32 @@ class SignalChannel(BaseChannel):
             OutboundMessage(channel=self.name, chat_id=chat_id, content=response)
         )
 
+    async def _handle_restart_command(self, chat_id: str) -> None:
+        """Handle /restart command - restart nanobot via launchd."""
+        import subprocess
+
+        # Notify the user immediately
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=self.name,
+                chat_id=chat_id,
+                content="Restarting now. Should be back online shortly.",
+            )
+        )
+
+        # Give the outbound message a moment to be dispatched
+        await asyncio.sleep(1)
+
+        # Execute the restart script directly (no LLM involved)
+        script = Path(__file__).resolve().parent / "scripts" / "restart.sh"
+        subprocess.Popen(["bash", str(script)], start_new_session=True)
+
     async def _handle_help_command(self, chat_id: str) -> None:
         """Handle /help command - show available commands."""
         help_text = (
             "🐈 nanobot commands\n\n"
             "/reset — Reset conversation history\n"
+            "/restart — Restart nanobot\n"
             "/help — Show this help message\n\n"
             "Just send me a message to chat!"
         )
