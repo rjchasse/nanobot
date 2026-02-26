@@ -26,22 +26,39 @@ class SkillsLoader:
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
         List all available skills.
-        
+
+        Supports both flat and categorized layouts:
+          - skills/my-skill/SKILL.md           (flat)
+          - skills/category/my-skill/SKILL.md  (categorized)
+
         Args:
             filter_unavailable: If True, filter out skills with unmet requirements.
-        
+
         Returns:
-            List of skill info dicts with 'name', 'path', 'source'.
+            List of skill info dicts with 'name', 'path', 'source', and optional 'category'.
         """
         skills = []
-        
+
         # Workspace skills (highest priority)
         if self.workspace_skills.exists():
-            for skill_dir in self.workspace_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
+            for entry in self.workspace_skills.iterdir():
+                if entry.is_dir():
+                    skill_file = entry / "SKILL.md"
                     if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+                        # Flat skill: skills/my-skill/SKILL.md
+                        skills.append({"name": entry.name, "path": str(skill_file), "source": "workspace"})
+                    else:
+                        # Category directory: skills/category/my-skill/SKILL.md
+                        for sub in entry.iterdir():
+                            if sub.is_dir():
+                                sub_skill = sub / "SKILL.md"
+                                if sub_skill.exists():
+                                    skills.append({
+                                        "name": sub.name,
+                                        "path": str(sub_skill),
+                                        "source": "workspace",
+                                        "category": entry.name,
+                                    })
         
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -59,24 +76,34 @@ class SkillsLoader:
     def load_skill(self, name: str) -> str | None:
         """
         Load a skill by name.
-        
+
+        Searches flat skills first, then category subdirectories.
+
         Args:
             name: Skill name (directory name).
-        
+
         Returns:
             Skill content or None if not found.
         """
-        # Check workspace first
+        # Check workspace first (flat)
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():
             return workspace_skill.read_text(encoding="utf-8")
-        
+
+        # Check workspace categories
+        if self.workspace_skills.exists():
+            for category in self.workspace_skills.iterdir():
+                if category.is_dir():
+                    cat_skill = category / name / "SKILL.md"
+                    if cat_skill.exists():
+                        return cat_skill.read_text(encoding="utf-8")
+
         # Check built-in
         if self.builtin_skills:
             builtin_skill = self.builtin_skills / name / "SKILL.md"
             if builtin_skill.exists():
                 return builtin_skill.read_text(encoding="utf-8")
-        
+
         return None
     
     def load_skills_for_context(self, skill_names: list[str]) -> str:
