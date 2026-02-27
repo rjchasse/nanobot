@@ -9,6 +9,9 @@ from pathlib import Path
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
+# Max characters of context to inject per skill (~5k tokens)
+MAX_CONTEXT_CHARS = 20_000
+
 
 class SkillsLoader:
     """
@@ -35,13 +38,11 @@ class SkillsLoader:
         """
         skills = []
         
-        # Workspace skills (highest priority)
+        # Workspace skills (highest priority) — supports both flat and nested layouts
         if self.workspace_skills.exists():
-            for skill_dir in self.workspace_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+            for skill_file in sorted(self.workspace_skills.rglob("SKILL.md")):
+                skill_dir = skill_file.parent
+                skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
         
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -56,28 +57,84 @@ class SkillsLoader:
             return [s for s in skills if self._check_requirements(self._get_skill_meta(s["name"]))]
         return skills
     
-    def load_skill(self, name: str) -> str | None:
-        """
-        Load a skill by name.
-        
-        Args:
-            name: Skill name (directory name).
-        
-        Returns:
-            Skill content or None if not found.
-        """
-        # Check workspace first
+    def _read_skill_file(self, name: str) -> str | None:
+        """Read raw SKILL.md content without context resolution."""
+        # Flat layout: skills/name/SKILL.md
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():
             return workspace_skill.read_text(encoding="utf-8")
-        
-        # Check built-in
+        # Nested layout: skills/category/name/SKILL.md
+        if self.workspace_skills.exists():
+            for match in self.workspace_skills.glob(f"*/{name}/SKILL.md"):
+                return match.read_text(encoding="utf-8")
+        # Builtin skills (flat only)
         if self.builtin_skills:
             builtin_skill = self.builtin_skills / name / "SKILL.md"
             if builtin_skill.exists():
                 return builtin_skill.read_text(encoding="utf-8")
-        
         return None
+
+    def load_skill(self, name: str) -> str | None:
+        """
+        Load a skill by name, with context files auto-appended.
+
+        Args:
+            name: Skill name (directory name).
+
+        Returns:
+            Skill content (with context appended) or None if not found.
+        """
+        content = self._read_skill_file(name)
+        if content:
+            meta = self.get_skill_metadata(name) or {}
+            ctx_str = meta.get("context", "")
+            if ctx_str:
+                resolved = self._resolve_context(ctx_str)
+                if resolved:
+                    content += f"\n\n---\n\n## Context\n\n{resolved}"
+        return content
+
+    def _resolve_context(self, context_str: str) -> str:
+        """Resolve context paths relative to workspace/context/ and return concatenated contents.
+
+        Enforces MAX_CONTEXT_CHARS budget. Files that would exceed the limit are skipped
+        and a warning is appended listing what was dropped.
+        """
+        parts = []
+        total = 0
+        skipped = []
+        base = self.workspace / "context"
+
+        # Collect all (relative_path, file_path) pairs in declaration order
+        files: list[tuple[str, Path]] = []
+        for raw in context_str.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            path = (base / raw).resolve()
+            try:
+                path.relative_to(base.resolve())
+            except ValueError:
+                continue
+            if path.is_file() and path.suffix == ".md":
+                files.append((str(path.relative_to(base)), path))
+            elif path.is_dir():
+                for md in sorted(path.glob("*.md")):
+                    files.append((str(md.relative_to(base)), md))
+
+        for rel, filepath in files:
+            content = filepath.read_text(encoding="utf-8")
+            chunk = f"### {rel}\n\n{content}"
+            if total + len(chunk) > MAX_CONTEXT_CHARS:
+                skipped.append(rel)
+                continue
+            parts.append(chunk)
+            total += len(chunk)
+
+        result = "\n\n---\n\n".join(parts)
+        if skipped:
+            result += f"\n\n---\n\n_Context budget exceeded. Skipped: {', '.join(skipped)}_"
+        return result
     
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         """
@@ -210,10 +267,10 @@ class SkillsLoader:
         Returns:
             Metadata dict or None.
         """
-        content = self.load_skill(name)
+        content = self._read_skill_file(name)
         if not content:
             return None
-        
+
         if content.startswith("---"):
             match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
             if match:

@@ -242,3 +242,40 @@ class ListDirTool(Tool):
             return f"Error: {e}"
         except Exception as e:
             return f"Error listing directory: {str(e)}"
+
+
+class UseSkillTool(Tool):
+    """Tool to load a skill with its declared context files auto-included."""
+
+    def __init__(self, skills_loader):
+        self._skills = skills_loader
+
+    @property
+    def name(self) -> str:
+        return "use_skill"
+
+    @property
+    def description(self) -> str:
+        return "Load a skill by name. Returns the skill instructions with any declared context auto-included."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The skill name"
+                }
+            },
+            "required": ["name"]
+        }
+
+    async def execute(self, name: str, **kwargs: Any) -> str:
+        try:
+            content = self._skills.load_skill(name)
+            if not content:
+                return f"Error: Skill '{name}' not found"
+            return self._skills._strip_frontmatter(content)
+        except Exception as e:
+            return f"Error loading skill: {str(e)}"
